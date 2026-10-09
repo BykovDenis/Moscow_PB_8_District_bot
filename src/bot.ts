@@ -44,7 +44,7 @@ async function syncCard(api: Api, env: Env, db: Db, userId: number) {
   const r = await db.get(userId);
   if (!r) return;
   if (!r.admin_msg_id && NO_CARD_YET.includes(r.step)) return;
-  const text = cardText(r);
+  const text = cardText(r, await db.pastAttempts(userId));
   const reply_markup = cardKeyboard(r);
   if (r.admin_msg_id) {
     try {

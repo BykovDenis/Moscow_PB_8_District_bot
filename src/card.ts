@@ -51,14 +51,28 @@ function speedLine(sec: number | null): string | null {
     : `⏱ Ответил на 1-й вопрос через ${t}`;
 }
 
-export function cardText(r: RequestRow): string {
+const PAST: Partial<Record<RequestRow["step"], string>> = {
+  approved: "✅ принят",
+  declined: "❌ отклонён",
+  expired: "⌛ не ответил",
+};
+
+/** «🔁 Ранее подавал заявку: 2 раза (⌛ не ответил ×1, ❌ отклонён ×1)» */
+function pastLine(past: { step: RequestRow["step"]; n: number }[]): string | null {
+  const total = past.reduce((sum, p) => sum + p.n, 0);
+  if (!total) return null;
+  const parts = past.map((p) => `${PAST[p.step] ?? "не завершена"} ×${p.n}`).join(", ");
+  return `🔁 Ранее подавал заявку: ${total} ${total === 1 ? "раз" : total < 5 ? "раза" : "раз"} (${parts})`;
+}
+
+export function cardText(r: RequestRow, past: { step: RequestRow["step"]; n: number }[] = []): string {
   const name = [r.first_name, r.last_name].filter(Boolean).join(" ");
   const lines = [
     `🆕 <b>Заявка</b>: ${userLink(r.user_id, name)}${r.username ? ` (@${esc(r.username)})` : ""}`,
     `🆔 <code>${r.user_id}</code>`,
     "",
     placeLine(r),
-    ...[speedLine(r.answer_sec)].filter((l): l is string => l !== null),
+    ...[speedLine(r.answer_sec), pastLine(past)].filter((l): l is string => l !== null),
     "",
     `📷 Фото профиля: ${r.photos > 0 ? `есть (${r.photos})` : "нет"}`,
     `👤 Username: ${r.username ? "есть" : "нет"}${r.premium ? " · ⭐ Premium" : ""}`,
