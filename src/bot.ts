@@ -36,10 +36,14 @@ const TEXT = {
   expired: "Заявка отклонена: не получили ответы на вопросы. Можно подать её заново.",
 };
 
-/** Обновить карточку заявки в админ-чате (или создать, если её ещё нет). */
+/** Пока человек не ответил на вопросы, админов не беспокоим: карточки ещё нет */
+const NO_CARD_YET: RequestRow["step"][] = ["resident", "place", "expired"];
+
+/** Обновить карточку заявки в админ-чате (или создать, когда заявка прошла вопросы). */
 async function syncCard(api: Api, env: Env, db: Db, userId: number) {
   const r = await db.get(userId);
   if (!r) return;
+  if (!r.admin_msg_id && NO_CARD_YET.includes(r.step)) return;
   const text = cardText(r);
   const reply_markup = cardKeyboard(r);
   if (r.admin_msg_id) {
@@ -149,9 +153,6 @@ export function createBot(env: Env) {
       language: u.language_code ?? null,
       ...(await profileMeta(ctx.api, env, req)),
     });
-
-    // Карточка — до вопросов: иначе быстрый ответ успевает раньше неё, и появляется вторая карточка
-    await syncCard(ctx.api, env, db, u.id);
 
     // Писать человеку можно только в первые 5 минут после заявки, поэтому сразу
     const dmOk = await tryDm(ctx.api, req.user_chat_id, TEXT.greeting(expireHours), residentKeyboard);
