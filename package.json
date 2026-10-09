@@ -1,0 +1,23 @@
+{
+  "name": "join-request-bot",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --test-scheduled",
+    "poll": "node scripts/poll.mjs",
+    "db:local": "wrangler d1 migrations apply join-bot --local",
+    "db:remote": "wrangler d1 migrations apply join-bot --remote",
+    "deploy": "wrangler deploy",
+    "webhook": "node scripts/set-webhook.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "grammy": "^1.46.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261009.1",
+    "typescript": "^7.0.2",
+    "wrangler": "^4.149.0"
+  }
+}
