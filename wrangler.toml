@@ -3,6 +3,10 @@ main = "src/index.ts"
 compatibility_date = "2026-09-01"
 compatibility_flags = ["nodejs_compat"]
 
+# Логи хранятся в Cloudflare: Workers & Pages → join-request-bot → Logs
+[observability]
+enabled = true
+
 # Раз в час: отклонить заявки, на которые не ответили за EXPIRE_HOURS
 [triggers]
 crons = ["0 * * * *"]

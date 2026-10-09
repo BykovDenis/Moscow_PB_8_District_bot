@@ -150,11 +150,16 @@ export function createBot(env: Env) {
       ...(await profileMeta(ctx.api, env, req)),
     });
 
+    // Карточка — до вопросов: иначе быстрый ответ успевает раньше неё, и появляется вторая карточка
+    await syncCard(ctx.api, env, db, u.id);
+
     // Писать человеку можно только в первые 5 минут после заявки, поэтому сразу
     const dmOk = await tryDm(ctx.api, req.user_chat_id, TEXT.greeting(expireHours), residentKeyboard);
-    // Ответов не будет, поэтому сразу на решение админам, без автоотклонения
-    if (!dmOk) await db.update(u.id, { dm_ok: 0, step: "review" });
-    await syncCard(ctx.api, env, db, u.id);
+    if (!dmOk) {
+      // Ответов не будет, поэтому сразу на решение админам, без автоотклонения
+      await db.update(u.id, { dm_ok: 0, step: "review" });
+      await syncCard(ctx.api, env, db, u.id);
+    }
   });
 
   // 2a. Вопрос 1: живёт ли в квартале (кнопки)
@@ -163,7 +168,8 @@ export function createBot(env: Env) {
     if (!r || r.step !== "resident") return ctx.answerCallbackQuery({ text: "Ответ уже получен" });
 
     const yes = ctx.match[1] === "yes";
-    await db.update(r.user_id, { resident: yes ? 1 : 0, step: "place" });
+    const answer_sec = Math.floor(Date.now() / 1000) - r.created_at;
+    await db.update(r.user_id, { resident: yes ? 1 : 0, step: "place", answer_sec });
     // Убрать кнопки и оставить в переписке выбранный ответ
     await ctx.editMessageText(`${ctx.callbackQuery.message?.text ?? ""}\n\n→ ${yes ? "Да" : "Нет"}`, {
       entities: ctx.callbackQuery.message?.entities,

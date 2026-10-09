@@ -15,6 +15,7 @@ export interface RequestRow {
   house_chats: string | null;
   resident: number | null;
   place: string | null;
+  answer_sec: number | null;
   step: Step;
   dm_ok: number;
   admin_msg_id: number | null;
