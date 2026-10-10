@@ -2,3 +2,9 @@ node_modules/
 .wrangler/
 .dev.vars
 .idea/
+# Аудит участников: ключи, сессия аккаунта (полный доступ!) и отчёты с личными данными
+tools/members-audit/.venv/
+tools/members-audit/.env
+tools/members-audit/session*
+tools/members-audit/reports/
+__pycache__/
