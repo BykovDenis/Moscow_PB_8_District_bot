@@ -10,8 +10,8 @@ export interface Health {
   error: string | null;
 }
 
-/** Ошибку доставки считаем актуальной, если она случилась за последние 2 часа */
-const RECENT_ERROR_SEC = 2 * 3600;
+/** Ошибку доставки считаем актуальной, если она случилась за последние 15 минут */
+const RECENT_ERROR_SEC = 15 * 60;
 /** Столько необработанных событий в очереди Telegram — уже повод насторожиться */
 const MAX_PENDING = 20;
 
@@ -25,7 +25,8 @@ export async function checkHealth(env: Env): Promise<Health> {
   const recentError =
     info?.last_error_date && now - info.last_error_date < RECENT_ERROR_SEC ? (info.last_error_message ?? "ошибка") : null;
   const pending = info?.pending_update_count ?? 0;
-  const webhook = !!info?.url && !recentError && pending < MAX_PENDING;
+  // Разовая ошибка не страшна: Telegram повторит доставку. Проблема — если ошибка свежая и события копятся.
+  const webhook = !!info?.url && !(recentError && pending > 0) && pending < MAX_PENDING;
 
   return { ok: db && webhook, db, webhook, pending, error: recentError };
 }

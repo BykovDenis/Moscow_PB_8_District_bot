@@ -36,11 +36,15 @@ const TEXT = {
   expired: "Заявка отклонена: не получили ответы на вопросы. Можно подать её заново.",
 };
 
-/** Обновить карточку заявки в админ-чате (или создать, если её ещё нет). */
+/** Пока человек не ответил на вопросы, админов не беспокоим: карточки ещё нет */
+const NO_CARD_YET: RequestRow["step"][] = ["resident", "place", "expired"];
+
+/** Обновить карточку заявки в админ-чате (или создать, когда заявка прошла вопросы). */
 async function syncCard(api: Api, env: Env, db: Db, userId: number) {
   const r = await db.get(userId);
   if (!r) return;
-  const text = cardText(r);
+  if (!r.admin_msg_id && NO_CARD_YET.includes(r.step)) return;
+  const text = cardText(r, await db.pastAttempts(userId));
   const reply_markup = cardKeyboard(r);
   if (r.admin_msg_id) {
     try {
@@ -152,9 +156,11 @@ export function createBot(env: Env) {
 
     // Писать человеку можно только в первые 5 минут после заявки, поэтому сразу
     const dmOk = await tryDm(ctx.api, req.user_chat_id, TEXT.greeting(expireHours), residentKeyboard);
-    // Ответов не будет, поэтому сразу на решение админам, без автоотклонения
-    if (!dmOk) await db.update(u.id, { dm_ok: 0, step: "review" });
-    await syncCard(ctx.api, env, db, u.id);
+    if (!dmOk) {
+      // Ответов не будет, поэтому сразу на решение админам, без автоотклонения
+      await db.update(u.id, { dm_ok: 0, step: "review" });
+      await syncCard(ctx.api, env, db, u.id);
+    }
   });
 
   // 2a. Вопрос 1: живёт ли в квартале (кнопки)
@@ -163,7 +169,8 @@ export function createBot(env: Env) {
     if (!r || r.step !== "resident") return ctx.answerCallbackQuery({ text: "Ответ уже получен" });
 
     const yes = ctx.match[1] === "yes";
-    await db.update(r.user_id, { resident: yes ? 1 : 0, step: "place" });
+    const answer_sec = Math.floor(Date.now() / 1000) - r.created_at;
+    await db.update(r.user_id, { resident: yes ? 1 : 0, step: "place", answer_sec });
     // Убрать кнопки и оставить в переписке выбранный ответ
     await ctx.editMessageText(`${ctx.callbackQuery.message?.text ?? ""}\n\n→ ${yes ? "Да" : "Нет"}`, {
       entities: ctx.callbackQuery.message?.entities,

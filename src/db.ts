@@ -15,6 +15,7 @@ export interface RequestRow {
   house_chats: string | null;
   resident: number | null;
   place: string | null;
+  answer_sec: number | null;
   step: Step;
   dm_ok: number;
   admin_msg_id: number | null;
@@ -32,9 +33,10 @@ export class Db {
     return this.db.prepare("SELECT * FROM requests WHERE user_id = ?").bind(userId).first<RequestRow>();
   }
 
-  /** Новая заявка (повторная заявка того же человека начинается заново). */
+  /** Новая заявка. Повторная заявка того же человека начинается заново, а прошлая уходит в архив. */
   async create(r: Pick<RequestRow, "user_id" | "user_chat_id" | "first_name" | "last_name" | "username" | "bio" | "photos" | "premium" | "language" | "invite_name" | "channel" | "house_chats">) {
     const t = now();
+    await this.db.prepare("INSERT INTO attempts SELECT * FROM requests WHERE user_id = ?").bind(r.user_id).run();
     await this.db
       .prepare(
         `INSERT OR REPLACE INTO requests
@@ -56,6 +58,15 @@ export class Db {
       .prepare(`UPDATE requests SET ${set} WHERE user_id = ?`)
       .bind(...entries.map(([, v]) => v), now(), userId)
       .run();
+  }
+
+  /** Итоги прошлых заявок человека: сколько раз и чем закончились. */
+  async pastAttempts(userId: number): Promise<{ step: Step; n: number }[]> {
+    const { results } = await this.db
+      .prepare("SELECT step, COUNT(*) AS n FROM attempts WHERE user_id = ? GROUP BY step")
+      .bind(userId)
+      .all<{ step: Step; n: number }>();
+    return results;
   }
 
   /** Заявки, где человек не ответил на вопросы дольше `hours` часов. */
