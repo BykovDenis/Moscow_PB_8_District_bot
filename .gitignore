@@ -7,3 +7,4 @@ tools/members-audit/.venv/
 tools/members-audit/.env
 tools/members-audit/session*
 tools/members-audit/reports/
+__pycache__/
