@@ -90,6 +90,14 @@ export class Db {
     return results;
   }
 
+  async error(updateType: string | null, userId: number | null, where: string, message: string) {
+    await this.db
+      .prepare("INSERT INTO errors (at, update_type, user_id, where_, message) VALUES (?, ?, ?, ?, ?)")
+      .bind(now(), updateType, userId, where, message.slice(0, 1000))
+      .run()
+      .catch((e) => console.error("failed to log error", e));
+  }
+
   async log(userId: number, action: string, actorId: number | null, actorName: string | null) {
     await this.db
       .prepare("INSERT INTO decisions (user_id, action, actor_id, actor_name, at) VALUES (?, ?, ?, ?, ?)")

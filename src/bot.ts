@@ -62,12 +62,13 @@ async function syncCard(api: Api, env: Env, db: Db, userId: number) {
   }
 }
 
-async function tryDm(api: Api, chatId: number, text: string, reply_markup?: InlineKeyboard) {
+/** Написать человеку; вернёт текст ошибки или null, если отправилось */
+async function tryDm(api: Api, chatId: number, text: string, reply_markup?: InlineKeyboard): Promise<string | null> {
   try {
     await api.sendMessage(chatId, text, { parse_mode: "HTML", reply_markup });
-    return true;
-  } catch {
-    return false;
+    return null;
+  } catch (e) {
+    return String(e);
   }
 }
 
@@ -106,6 +107,17 @@ export function createBot(env: Env) {
   const bot = new Bot(env.BOT_TOKEN);
   const db = new Db(env.DB);
   const expireHours = Number(env.EXPIRE_HOURS) || 48;
+
+  // Любая ошибка записывается в базу (таблица errors), а Telegram получает 200:
+  // иначе он повторяет то же событие, и человек видит «Ответ уже получен» вместо вопроса
+  bot.use(async (ctx, next) => {
+    try {
+      await next();
+    } catch (e) {
+      const type = Object.keys(ctx.update).find((k) => k !== "update_id") ?? null;
+      await db.error(type, ctx.from?.id ?? null, "handler", e instanceof Error ? `${e.message}\n${e.stack ?? ""}` : String(e));
+    }
+  });
 
   // Узнать id группы при настройке: написать /chatid в группе
   bot.command("chatid", (ctx) => ctx.reply(`id этого чата: <code>${ctx.chat.id}</code>`, { parse_mode: "HTML" }));
@@ -155,8 +167,9 @@ export function createBot(env: Env) {
     });
 
     // Писать человеку можно только в первые 5 минут после заявки, поэтому сразу
-    const dmOk = await tryDm(ctx.api, req.user_chat_id, TEXT.greeting(expireHours), residentKeyboard);
-    if (!dmOk) {
+    const dmError = await tryDm(ctx.api, req.user_chat_id, TEXT.greeting(expireHours), residentKeyboard);
+    if (dmError) {
+      await db.error("chat_join_request", u.id, "greeting", dmError);
       // Ответов не будет, поэтому сразу на решение админам, без автоотклонения
       await db.update(u.id, { dm_ok: 0, step: "review" });
       await syncCard(ctx.api, env, db, u.id);
@@ -171,13 +184,24 @@ export function createBot(env: Env) {
     const yes = ctx.match[1] === "yes";
     const answer_sec = Math.floor(Date.now() / 1000) - r.created_at;
     await db.update(r.user_id, { resident: yes ? 1 : 0, step: "place", answer_sec });
-    // Убрать кнопки и оставить в переписке выбранный ответ
-    await ctx.editMessageText(`${ctx.callbackQuery.message?.text ?? ""}\n\n→ ${yes ? "Да" : "Нет"}`, {
-      entities: ctx.callbackQuery.message?.entities,
-    });
-    await ctx.answerCallbackQuery();
-    await ctx.reply(yes ? TEXT.house : TEXT.district, { parse_mode: "HTML" });
-    await syncCard(ctx.api, env, db, r.user_id);
+    await ctx.answerCallbackQuery().catch(() => {});
+
+    // Главное — задать второй вопрос. Если не вышло, человек не должен потеряться: отдаём админам.
+    try {
+      await ctx.reply(yes ? TEXT.house : TEXT.district, { parse_mode: "HTML" });
+    } catch (e) {
+      await db.error("callback_query", r.user_id, "second question", String(e));
+      await db.update(r.user_id, { dm_ok: 0, step: "review" });
+      await syncCard(ctx.api, env, db, r.user_id);
+      return;
+    }
+
+    // Второстепенное: убрать кнопки и оставить в переписке выбранный ответ
+    await ctx
+      .editMessageText(`${ctx.callbackQuery.message?.text ?? ""}\n\n→ ${yes ? "Да" : "Нет"}`, {
+        entities: ctx.callbackQuery.message?.entities,
+      })
+      .catch((e) => db.error("callback_query", r.user_id, "edit greeting", String(e)));
   });
 
   // 2b. Вопрос 2 и прочие сообщения в личке
