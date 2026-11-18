@@ -19,13 +19,14 @@ const MAX_ANSWER = 50;
 const TEXT = {
   greeting: (hours: number) =>
     "Здравствуйте! Вы подали заявку в общий чат 8 квартала (8 фаза), мкрн Переделкино Ближнее.\n\n" +
-    "Чтобы админы могли её рассмотреть, ответьте, пожалуйста, на два вопроса. " +
-    `Если ответа не будет ${hours} ч, заявка отклонится автоматически.\n\n` +
-    "1/2. <b>Вы живёте в 8 квартале (8 фазе)?</b>",
+    "<b>Вы живёте в 8 квартале (8 фазе)?</b>\n" +
+    "Если да, нажмите «Да» и напишите сюда номер дома или адрес.\n" +
+    "Если нет, нажмите «Нет» и напишите сюда свой квартал или фазу.\n\n" +
+    `На ответ есть ${hours} ч с момента подачи заявки.`,
   pressButton: "Пожалуйста, выберите ответ кнопкой в сообщении выше.",
-  house: "2/2. <b>В каком доме вы живёте?</b> Напишите номер или адрес.",
-  district: "2/2. <b>В каком квартале (фазе) микрорайона вы живёте?</b>",
-  done: "Спасибо! Заявка передана админам. Как только её рассмотрят, вы получите доступ к чату.",
+  house: "Напишите сюда номер дома или адрес.",
+  district: "Напишите сюда свой квартал или фазу.",
+  done: "Спасибо! Заявка передана админам на рассмотрение.",
   tooLong: `Слишком длинный ответ, уложитесь, пожалуйста, в ${MAX_ANSWER} символов.`,
   waiting: "Ваша заявка уже у админов, ждите решения.",
   noRequest:
@@ -184,23 +185,11 @@ export function createBot(env: Env) {
     const yes = ctx.match[1] === "yes";
     const answer_sec = Math.floor(Date.now() / 1000) - r.created_at;
     await db.update(r.user_id, { resident: yes ? 1 : 0, step: "place", answer_sec });
-    await ctx.answerCallbackQuery().catch(() => {});
-
-    // Главное — задать второй вопрос. Если не вышло, человек не должен потеряться: отдаём админам.
-    try {
-      await ctx.reply(yes ? TEXT.house : TEXT.district, { parse_mode: "HTML" });
-    } catch (e) {
-      await db.error("callback_query", r.user_id, "second question", String(e));
-      await db.update(r.user_id, { dm_ok: 0, step: "review" });
-      await syncCard(ctx.api, env, db, r.user_id);
-      return;
-    }
-
-    // Второстепенное: убрать кнопки и оставить в переписке выбранный ответ
+    // Подсказка работает и для кнопок в приветствиях, отправленных до обновления.
+    const prompt = yes ? TEXT.house : TEXT.district;
+    await ctx.answerCallbackQuery({ text: prompt }).catch(() => {});
     await ctx
-      .editMessageText(`${ctx.callbackQuery.message?.text ?? ""}\n\n→ ${yes ? "Да" : "Нет"}`, {
-        entities: ctx.callbackQuery.message?.entities,
-      })
+      .editMessageText(`Вы выбрали «${yes ? "Да" : "Нет"}». ${prompt}`)
       .catch((e) => db.error("callback_query", r.user_id, "edit greeting", String(e)));
   });
 
@@ -215,8 +204,8 @@ export function createBot(env: Env) {
     } else if (r.step === "place") {
       if (answer.length > MAX_ANSWER) return ctx.reply(TEXT.tooLong);
       await db.update(r.user_id, { place: answer, step: "review" });
-      await ctx.reply(TEXT.done);
       await syncCard(ctx.api, env, db, r.user_id);
+      await ctx.reply(TEXT.done);
     } else if (r.step === "review") {
       await ctx.reply(TEXT.waiting);
     }
