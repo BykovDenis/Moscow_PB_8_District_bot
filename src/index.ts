@@ -1,6 +1,7 @@
 import { webhookCallback, type Bot } from "grammy";
 import { createBot, expireStale, type Env } from "./bot";
 import { alertIfUnhealthy, checkHealth } from "./health";
+import { DIGEST_CRON, runDigests } from "./digest";
 
 // Бот живёт, пока жив воркер, чтобы не вызывать getMe на каждый запрос
 let bot: Bot | undefined;
@@ -26,7 +27,9 @@ export default {
     return webhookCallback(bot, "cloudflare-mod", { secretToken: env.WEBHOOK_SECRET })(req);
   },
 
-  async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext) {
-    ctx.waitUntil(Promise.all([expireStale(env), alertIfUnhealthy(env)]));
+  async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext) {
+    const daily = event.cron === DIGEST_CRON;
+    ctx.waitUntil(runDigests(env, event.scheduledTime, daily));
+    if (!daily) ctx.waitUntil(Promise.all([expireStale(env), alertIfUnhealthy(env)]));
   },
 } satisfies ExportedHandler<Env>;
