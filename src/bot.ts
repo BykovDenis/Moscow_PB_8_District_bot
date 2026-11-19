@@ -3,9 +3,11 @@ import type { ChatJoinRequest } from "grammy/types";
 import { cardKeyboard, cardText, residentKeyboard } from "./card";
 import { Db, type RequestRow } from "./db";
 import { checkHealth } from "./health";
+import { collectMessage } from "./digest";
 
 export interface Env {
   DB: D1Database;
+  AI: Ai;
   BOT_TOKEN: string;
   WEBHOOK_SECRET: string;
   MAIN_CHAT_ID: string;
@@ -113,6 +115,12 @@ export function createBot(env: Env) {
   const bot = new Bot(env.BOT_TOKEN);
   const db = new Db(env.DB);
   const expireHours = Number(env.EXPIRE_HOURS) || 48;
+
+  // При сбое записи группового сообщения вебхук вернёт ошибку для повторной доставки.
+  bot.on("message", async (ctx, next) => {
+    await collectMessage(env, ctx.message);
+    await next();
+  });
 
   // Любая ошибка записывается в базу (таблица errors), а Telegram получает 200:
   // иначе он повторяет то же событие, и человек видит «Ответ уже получен» вместо вопроса
