@@ -22,11 +22,11 @@ const TEXT = {
     "<b>Вы живёте в 8 квартале (8 фазе)?</b>\n" +
     "Если да, нажмите «Да» и напишите сюда номер дома или адрес.\n" +
     "Если нет, нажмите «Нет» и напишите сюда свой квартал или фазу.\n\n" +
-    `На ответ есть ${hours} ч с момента подачи заявки.`,
+    `На выбор кнопкой есть ${hours} ч с момента подачи заявки.`,
   pressButton: "Пожалуйста, выберите ответ кнопкой в сообщении выше.",
   house: "Напишите сюда номер дома или адрес.",
   district: "Напишите сюда свой квартал или фазу.",
-  done: "Спасибо! Заявка передана админам на рассмотрение.",
+  done: "Спасибо! Ваш ответ добавлен к заявке.",
   tooLong: `Слишком длинный ответ, уложитесь, пожалуйста, в ${MAX_ANSWER} символов.`,
   waiting: "Ваша заявка уже у админов, ждите решения.",
   noRequest:
@@ -37,14 +37,11 @@ const TEXT = {
   expired: "Заявка отклонена: не получили ответы на вопросы. Можно подать её заново.",
 };
 
-/** Пока человек не ответил на вопросы, админов не беспокоим: карточки ещё нет */
-const NO_CARD_YET: RequestRow["step"][] = ["resident", "place", "expired"];
-
-/** Обновить карточку заявки в админ-чате (или создать, когда заявка прошла вопросы). */
+/** Создать карточку при передаче на рассмотрение или обновить существующую. */
 async function syncCard(api: Api, env: Env, db: Db, userId: number) {
   const r = await db.get(userId);
   if (!r) return;
-  if (!r.admin_msg_id && NO_CARD_YET.includes(r.step)) return;
+  if (!r.admin_msg_id && r.step !== "place" && r.step !== "review") return;
   const text = cardText(r, await db.pastAttempts(userId));
   const reply_markup = cardKeyboard(r);
   if (r.admin_msg_id) {
@@ -59,7 +56,15 @@ async function syncCard(api: Api, env: Env, db: Db, userId: number) {
       reply_markup,
       link_preview_options: { is_disabled: true },
     });
-    await db.update(userId, { admin_msg_id: msg.message_id });
+    if (!await db.attachCard(r, msg.message_id)) {
+      await api.deleteMessage(env.ADMIN_CHAT_ID, msg.message_id);
+      return;
+    }
+  }
+  // Пока Telegram отправлял или редактировал карточку, мог прийти адрес или решение.
+  const latest = await db.get(userId);
+  if (latest?.created_at === r.created_at && latest.step !== r.step) {
+    await syncCard(api, env, db, userId);
   }
 }
 
@@ -138,8 +143,8 @@ export function createBot(env: Env) {
       `Необработанных событий: ${h.pending}`,
       "",
       "<b>Сейчас</b>",
-      `⏳ Отвечают на вопросы: ${n("resident") + n("place")}`,
-      `🟡 Ждут вашего решения: ${n("review")}`,
+      `⏳ Ещё не нажали кнопку: ${n("resident")}`,
+      `🟡 Ждут вашего решения: ${n("place") + n("review")} (ещё не указали дом или квартал: ${n("place")})`,
       "",
       "<b>За 7 дней</b>",
       `✅ Принято: ${n("approved", "recent")}`,
@@ -184,13 +189,17 @@ export function createBot(env: Env) {
 
     const yes = ctx.match[1] === "yes";
     const answer_sec = Math.floor(Date.now() / 1000) - r.created_at;
-    await db.update(r.user_id, { resident: yes ? 1 : 0, step: "place", answer_sec });
+    if (!await db.update(r.user_id, { resident: yes ? 1 : 0, step: "place", answer_sec }, r)) {
+      return ctx.answerCallbackQuery({ text: "Заявка уже обновлена" });
+    }
     // Подсказка работает и для кнопок в приветствиях, отправленных до обновления.
     const prompt = yes ? TEXT.house : TEXT.district;
     await ctx.answerCallbackQuery({ text: prompt }).catch(() => {});
-    await ctx
-      .editMessageText(`Вы выбрали «${yes ? "Да" : "Нет"}». ${prompt}`)
-      .catch((e) => db.error("callback_query", r.user_id, "edit greeting", String(e)));
+    await Promise.all([
+      ctx.editMessageText(`Вы выбрали «${yes ? "Да" : "Нет"}».\n\n${prompt} Ваш ответ появится в карточке заявки у администратора.`)
+        .catch((e) => db.error("callback_query", r.user_id, "edit greeting", String(e))),
+      syncCard(ctx.api, env, db, r.user_id),
+    ]);
   });
 
   // 2b. Вопрос 2 и прочие сообщения в личке
@@ -203,8 +212,9 @@ export function createBot(env: Env) {
       await ctx.reply(TEXT.pressButton);
     } else if (r.step === "place") {
       if (answer.length > MAX_ANSWER) return ctx.reply(TEXT.tooLong);
-      await db.update(r.user_id, { place: answer, step: "review" });
-      await syncCard(ctx.api, env, db, r.user_id);
+      if (!await db.update(r.user_id, { place: answer, step: "review" }, r)) return;
+      // Первую карточку отправляет обработчик нажатия, даже если текст пришёл одновременно.
+      if ((await db.get(r.user_id))?.admin_msg_id) await syncCard(ctx.api, env, db, r.user_id);
       await ctx.reply(TEXT.done);
     } else if (r.step === "review") {
       await ctx.reply(TEXT.waiting);
@@ -224,7 +234,7 @@ export function createBot(env: Env) {
     const action = ctx.match[1] as "approve" | "decline";
     const userId = Number(ctx.match[2]);
     const r = await db.get(userId);
-    if (!r || !["resident", "place", "review"].includes(r.step)) {
+    if (!r || r.admin_msg_id !== ctx.callbackQuery.message?.message_id || !["place", "review"].includes(r.step)) {
       return ctx.answerCallbackQuery({ text: "Заявка уже обработана" });
     }
 
@@ -257,10 +267,22 @@ export function createBot(env: Env) {
 export async function expireStale(env: Env) {
   const api = new Api(env.BOT_TOKEN);
   const db = new Db(env.DB);
+  // Сюда также попадут незавершённые заявки, в которых кнопку нажали до обновления бота.
+  for (const { user_id } of await db.missingCards()) {
+    await syncCard(api, env, db, user_id).catch((e) => db.error("scheduled", user_id, "admin card", String(e)));
+  }
   const stale: RequestRow[] = await db.stale(Number(env.EXPIRE_HOURS) || 48);
   for (const r of stale) {
-    await api.declineChatJoinRequest(env.MAIN_CHAT_ID, r.user_id).catch(() => {});
-    await db.update(r.user_id, { step: "expired", decided_by: "бот" });
+    if (!await db.update(r.user_id, { step: "expired", decided_by: "бот" }, r)) continue;
+    try {
+      await api.declineChatJoinRequest(env.MAIN_CHAT_ID, r.user_id);
+    } catch (e) {
+      if (!(e instanceof GrammyError && /HIDE_REQUESTER_MISSING|USER_ALREADY_PARTICIPANT/.test(e.description))) {
+        await db.update(r.user_id, { step: "resident", decided_by: null }, { ...r, step: "expired" });
+        await db.error("scheduled", r.user_id, "expire", String(e));
+        continue;
+      }
+    }
     await db.log(r.user_id, "expire", null, "бот");
     await syncCard(api, env, db, r.user_id).catch((e) => console.error("card", e));
     await tryDm(api, r.user_chat_id, TEXT.expired);

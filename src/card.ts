@@ -7,7 +7,7 @@ const userLink = (id: number, name: string) => `<a href="tg://user?id=${id}">${e
 
 const STATUS: Record<RequestRow["step"], string> = {
   resident: "⏳ Ждём ответ: живёт ли в квартале",
-  place: "⏳ Ждём ответ: дом / квартал",
+  place: "🟡 На рассмотрении. Можно написать заявителю или принять решение сейчас.",
   review: "🟡 Ждёт решения",
   approved: "✅ Принят",
   declined: "❌ Отклонён",
@@ -15,7 +15,7 @@ const STATUS: Record<RequestRow["step"], string> = {
 };
 
 function placeLine(r: RequestRow): string {
-  const place = r.place ? `<b>${esc(r.place)}</b>` : "—";
+  const place = r.place ? `<b>${esc(r.place)}</b>` : "пока не указан";
   if (r.resident === 1) return `🏠 Живёт в квартале, дом: ${place}`;
   if (r.resident === 0) return `🏘 <b>Не из квартала</b>, квартал (фаза): ${place}`;
   return "🏠 Живёт в квартале: —";
