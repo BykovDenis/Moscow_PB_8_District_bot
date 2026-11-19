@@ -51,13 +51,28 @@ export class Db {
       .run();
   }
 
-  async update(userId: number, fields: Partial<Omit<RequestRow, "user_id">>) {
+  async update(userId: number, fields: Partial<Omit<RequestRow, "user_id">>, expected?: Pick<RequestRow, "step" | "created_at">) {
     const entries = Object.entries(fields);
     const set = [...entries.map(([k]) => `${k} = ?`), "updated_at = ?"].join(", ");
-    await this.db
-      .prepare(`UPDATE requests SET ${set} WHERE user_id = ?`)
-      .bind(...entries.map(([, v]) => v), now(), userId)
+    const result = await this.db
+      .prepare(`UPDATE requests SET ${set} WHERE user_id = ?${expected ? " AND step = ? AND created_at = ?" : ""}`)
+      .bind(...entries.map(([, v]) => v), now(), userId, ...(expected ? [expected.step, expected.created_at] : []))
       .run();
+    return result.meta.changes === 1;
+  }
+
+  async attachCard(r: RequestRow, messageId: number) {
+    const result = await this.db.prepare(
+      "UPDATE requests SET admin_msg_id = ? WHERE user_id = ? AND created_at = ? AND admin_msg_id IS NULL",
+    ).bind(messageId, r.user_id, r.created_at).run();
+    return result.meta.changes === 1;
+  }
+
+  async missingCards() {
+    const { results } = await this.db.prepare(
+      "SELECT user_id FROM requests WHERE step IN ('place', 'review') AND admin_msg_id IS NULL AND updated_at < ?",
+    ).bind(now() - 300).all<{ user_id: number }>();
+    return results;
   }
 
   /** Итоги прошлых заявок человека: сколько раз и чем закончились. */
@@ -72,7 +87,7 @@ export class Db {
   /** Заявки, где человек не ответил на вопросы дольше `hours` часов. */
   async stale(hours: number): Promise<RequestRow[]> {
     const { results } = await this.db
-      .prepare("SELECT * FROM requests WHERE step IN ('resident', 'place') AND created_at < ?")
+      .prepare("SELECT * FROM requests WHERE step = 'resident' AND created_at < ?")
       .bind(now() - hours * 3600)
       .all<RequestRow>();
     return results;
